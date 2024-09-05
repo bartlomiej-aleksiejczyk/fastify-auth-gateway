@@ -4,15 +4,26 @@ import fastifyCors from "@fastify/cors";
 const fastify = Fastify({ logger: true });
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const allowedOrigins = process.env.ALLOWED_ORIGINS
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
   : ["http://localhost:3000"];
 const USERNAME = process.env.USERNAME || "admin";
 const PASSWORD = process.env.PASSWORD || "password";
 
 await fastify.register(fastifyCors, {
-  origin: allowedOrigins,
+  origin: ALLOWED_ORIGINS,
 });
+
+function validateOrigin(req, reply) {
+  const origin = req.headers["origin"];
+
+  if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+    reply.status(403).send("Origin not allowed");
+    return false;
+  }
+
+  return true;
+}
 
 function basicAuth(req, reply) {
   const authHeader = req.headers["authorization"];
@@ -44,13 +55,17 @@ fastify.get("/health", async (request, reply) => {
 });
 
 fastify.get("/verify", async (request, reply) => {
-  if (basicAuth(request, reply)) {
-    reply.status(200).send("Authenticated");
+  if (!validateOrigin(request, reply)) {
+    return;
   }
+  if (!basicAuth(request, reply)) {
+    return;
+  }
+  reply.status(200).send("Authenticated");
 });
 
 try {
-  await fastify.listen({ port: PORT });
+  await fastify.listen({ host: "0.0.0.0", port: PORT });
 } catch (err) {
   fastify.log.error(err);
   process.exit(1);
