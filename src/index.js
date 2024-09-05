@@ -9,10 +9,52 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   : ["http://localhost:3000"];
 const USERNAME = process.env.USERNAME || "admin";
 const PASSWORD = process.env.PASSWORD || "password";
+const MAX_FAILED_ATTEMPTS = process.env.PORT
+  ? parseInt(process.env.MAX_FAILED_ATTEMPTS, 10)
+  : 3;
+const BAN_DURATION_HOURS = process.env.PORT
+  ? parseInt(process.env.BAN_DURATION_HOURS * 60 * 60 * 1000, 60 * 60 * 1000)
+  : 1;
 
 await fastify.register(fastifyCors, {
   origin: ALLOWED_ORIGINS,
 });
+
+const failedLoginAttempts = {};
+const bannedIPs = {};
+
+function isIPBanned(ip) {
+  if (bannedIPs[ip]) {
+    const banExpiration = bannedIPs[ip];
+    if (Date.now() < banExpiration) {
+      return true;
+    } else {
+      delete bannedIPs[ip];
+      return false;
+    }
+  }
+  return false;
+}
+
+function trackFailedAttempt(ip) {
+  if (!failedLoginAttempts[ip]) {
+    failedLoginAttempts[ip] = { count: 1, lastAttempt: Date.now() };
+  } else {
+    failedLoginAttempts[ip].count += 1;
+    failedLoginAttempts[ip].lastAttempt = Date.now();
+  }
+
+  if (failedLoginAttempts[ip].count >= MAX_FAILED_ATTEMPTS) {
+    bannedIPs[ip] = Date.now() + BAN_DURATION_HOURS;
+    delete failedLoginAttempts[ip];
+  }
+}
+
+function resetFailedAttempts(ip) {
+  if (failedLoginAttempts[ip]) {
+    delete failedLoginAttempts[ip];
+  }
+}
 
 function validateOrigin(req, reply) {
   const origin = req.headers["origin"];
@@ -26,6 +68,13 @@ function validateOrigin(req, reply) {
 }
 
 function basicAuth(req, reply) {
+  const ip = req.ip || req.connection.remoteAddress;
+
+  if (isIPBanned(ip)) {
+    reply.status(403).send("Your IP is banned. Try again later.");
+    return false;
+  }
+
   const authHeader = req.headers["authorization"];
 
   if (!authHeader) {
@@ -43,8 +92,10 @@ function basicAuth(req, reply) {
   const [username, password] = credentials.split(":");
 
   if (username === USERNAME && password === PASSWORD) {
+    resetFailedAttempts(ip);
     return true;
   } else {
+    trackFailedAttempt(ip);
     reply.status(401).send("Invalid credentials");
     return false;
   }
